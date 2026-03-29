@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ENGO 551 – Lab 6 | Line Simplification</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0d1117; --surface: #161b22; --border: #30363d;
+            --accent: #58a6ff; --accent2: #3fb950; --danger: #f85149;
+            --warn: #d29922; --text: #e6edf3; --muted: #8b949e;
+            --radius: 6px; --mono: 'Space Mono', monospace; --sans: 'DM Sans', sans-serif;
+            --panel-w: 280px;
+        }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: var(--bg); color: var(--text); font-family: var(--sans); height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+
+        header { display: flex; align-items: center; gap: 10px; padding: 9px 14px; background: var(--surface); border-bottom: 1px solid var(--border); flex-shrink: 0; z-index: 10; }
+        header h1 { font-family: var(--mono); font-size: 12px; color: var(--accent); letter-spacing: .04em; white-space: nowrap; }
+        #conn-status { margin-left: auto; font-family: var(--mono); font-size: 11px; padding: 3px 9px; border-radius: 20px; background: #21262d; border: 1px solid var(--border); color: var(--muted); display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+        #conn-status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+        #conn-status.drawing .dot { background: var(--warn); box-shadow: 0 0 5px var(--warn); }
+        #conn-status.done .dot { background: var(--accent2); box-shadow: 0 0 5px var(--accent2); }
+
+        .main { display: flex; flex: 1; overflow: hidden; position: relative; }
+        #map { flex: 1; min-width: 0; cursor: crosshair; }
+
+        /* ── Desktop sidebar ── */
+        .sidebar {
+            width: var(--panel-w); min-width: 200px; max-width: 80vw;
+            background: var(--surface); border-right: 1px solid var(--border);
+            display: flex; flex-direction: column; overflow: hidden;
+            flex-shrink: 0; position: relative; transition: width .2s;
+        }
+        .sidebar.collapsed { width: 0 !important; border-right: none; }
+
+        .resize-handle {
+            position: absolute; right: 0; top: 0; bottom: 0; width: 5px;
+            cursor: col-resize; z-index: 20; background: transparent;
+        }
+        .resize-handle:hover, .resize-handle.dragging { background: var(--accent); opacity: .5; }
+
+        .sidebar-inner { flex: 1; overflow-y: auto; display: flex; flex-direction: column; min-width: 200px; }
+
+        #panel-toggle {
+            background: transparent; border: 1px solid var(--border);
+            color: var(--muted); font-family: var(--mono); font-size: 11px;
+            padding: 4px 9px; border-radius: var(--radius); cursor: pointer;
+            white-space: nowrap; width: auto; margin: 0; flex-shrink: 0;
+        }
+        #panel-toggle:hover { border-color: var(--accent); color: var(--accent); }
+
+        /* sections */
+        .section { padding: 14px; border-bottom: 1px solid var(--border); }
+        .section-title { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 10px; }
+
+        label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; font-family: var(--mono); }
+        input[type="range"] { width: 100%; margin-bottom: 4px; }
+        .range-row { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 11px; color: var(--muted); margin-bottom: 10px; }
+        #tol-value { color: var(--text); }
+
+        button { width: 100%; padding: 9px 12px; border: none; border-radius: var(--radius); font-family: var(--mono); font-size: 11px; cursor: pointer; transition: opacity .2s, transform .1s; margin-top: 5px; }
+        button:active { transform: scale(.98); }
+        button:disabled { opacity: .35; cursor: not-allowed; }
+        .btn-primary   { background: var(--accent);  color: #0d1117; }
+        .btn-danger    { background: var(--danger);  color: #fff; }
+        .btn-success   { background: var(--accent2); color: #0d1117; }
+        .btn-secondary { background: #21262d; color: var(--text); border: 1px solid var(--border); }
+
+        /* legend */
+        .legend { display: flex; flex-direction: column; gap: 8px; }
+        .legend-item { display: flex; align-items: center; gap: 8px; font-size: 11px; font-family: var(--mono); color: var(--muted); }
+        .legend-line { width: 28px; height: 3px; border-radius: 2px; }
+
+        /* stats */
+        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .stat-card { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; }
+        .stat-label { font-family: var(--mono); font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
+        .stat-value { font-family: var(--mono); font-size: 16px; color: var(--text); }
+        .stat-value.highlight { color: var(--accent2); }
+
+        /* log */
+        #log { font-family: var(--mono); font-size: 10px; color: var(--muted); padding: 10px 14px; line-height: 1.7; }
+        #log .entry.ok    { color: var(--accent2); }
+        #log .entry.warn  { color: var(--warn); }
+        #log .entry.info  { color: var(--accent); }
+
+        /* Leaflet popup */
+        .leaflet-popup-content-wrapper { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--mono); font-size: 12px; }
+        .leaflet-popup-tip { background: var(--surface); }
+
+        /* ── Mobile bottom drawer ── */
+        @media (max-width: 640px) {
+            .main { flex-direction: column; }
+            #map { flex: 1; width: 100%; order: 1; }
+            .sidebar {
+                width: 100% !important; max-width: 100%; min-width: unset;
+                border-right: none; border-top: 1px solid var(--border);
+                height: var(--drawer-h, 48px);
+                flex-shrink: 0; order: 2;
+                transition: height .25s ease;
+                overflow: hidden;
+            }
+            .sidebar.collapsed { width: 100% !important; height: 48px !important; }
+            .resize-handle { display: none; }
+            .drawer-bar {
+                display: flex; align-items: center; justify-content: space-between;
+                padding: 0 14px; height: 48px; flex-shrink: 0;
+                cursor: pointer; user-select: none; touch-action: none;
+                border-bottom: 1px solid var(--border);
+            }
+            .drawer-bar .drag-pill { width: 36px; height: 4px; border-radius: 2px; background: var(--border); }
+            .drawer-bar .drawer-label { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+            .sidebar-inner { overflow-y: auto; }
+            #panel-toggle { display: none !important; }
+        }
+        @media (min-width: 641px) {
+            .drawer-bar { display: none; }
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>&#9651; ENGO551 · Lab 6 · Line Simplification</h1>
+    <button id="panel-toggle" title="Toggle panel">&#9776; Panel</button>
+    <div id="conn-status">
+        <span class="dot"></span>
+        <span id="status-label">Ready</span>
+    </div>
+</header>
+
+<div class="main">
+    <div class="sidebar" id="sidebar">
+        <div class="drawer-bar" id="drawer-bar">
+            <span class="drawer-label">Controls</span>
+            <div class="drag-pill"></div>
+            <span id="drawer-chevron" style="font-size:14px;color:var(--muted);">&#8964;</span>
+        </div>
+        <div class="resize-handle" id="resize-handle"></div>
+
+        <div class="sidebar-inner">
+
+            <!-- 01 Draw -->
+            <div class="section">
+                <div class="section-title">01 · Draw Polyline</div>
+                <p style="font-size:11px;color:var(--muted);font-family:var(--mono);margin-bottom:10px;line-height:1.6;">
+                    Click on the map to add points.<br>Need at least 2 points.
+                </p>
+                <button id="draw-btn" class="btn-primary">&#9998; Start Drawing</button>
+                <button id="finish-btn" class="btn-secondary" disabled>&#10003; Finish Drawing</button>
+            </div>
+
+            <!-- 02 Simplify -->
+            <div class="section">
+                <div class="section-title">02 · Simplify</div>
+                <label>Tolerance</label>
+                <input type="range" id="tolerance" min="0.0001" max="0.05" step="0.0001" value="0.001" />
+                <div class="range-row">
+                    <span>Fine</span>
+                    <span id="tol-value">0.001</span>
+                    <span>Coarse</span>
+                </div>
+                <button id="simplify-btn" class="btn-success" disabled>&#9881; Simplify Line</button>
+            </div>
+
+            <!-- 03 Clear -->
+            <div class="section">
+                <div class="section-title">03 · Clear</div>
+                <button id="clear-btn" class="btn-danger">&#128465; Clear &amp; Start Over</button>
+            </div>
+
+            <!-- 04 Legend -->
+            <div class="section">
+                <div class="section-title">04 · Legend</div>
+                <div class="legend">
+                    <div class="legend-item">
+                        <div class="legend-line" style="background:#58a6ff;"></div>
+                        <span>Original polyline</span>
+                    </div>
+                    <div class="legend-item">
+                        <div class="legend-line" style="background:#f85149; height:3px; border-top: 2px dashed #f85149; background: none;"></div>
+                        <span>Simplified line</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 05 Stats -->
+            <div class="section">
+                <div class="section-title">05 · Stats</div>
+                <div class="stat-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Original pts</div>
+                        <div class="stat-value" id="stat-original">—</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Simplified pts</div>
+                        <div class="stat-value highlight" id="stat-simplified">—</div>
+                    </div>
+                    <div class="stat-card" style="grid-column:span 2;">
+                        <div class="stat-label">Points removed</div>
+                        <div class="stat-value" id="stat-removed">—</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- log -->
+            <div id="log"></div>
+        </div>
+    </div>
+
+    <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+<script>
+// ── Map ──
+const map = L.map("map").setView([51.0447, -114.0719], 12);
+L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
+    subdomains: "abcd", maxZoom: 19
+}).addTo(map);
+
+// ── State ──
+let drawing = false;
+let drawnPoints = [];
+let originalLayer = null;
+let simplifiedLayer = null;
+let tempMarkers = [];
+
+// ── UI refs ──
+const drawBtn     = document.getElementById("draw-btn");
+const finishBtn   = document.getElementById("finish-btn");
+const simplifyBtn = document.getElementById("simplify-btn");
+const clearBtn    = document.getElementById("clear-btn");
+const tolSlider   = document.getElementById("tolerance");
+const tolValue    = document.getElementById("tol-value");
+const statusLabel = document.getElementById("status-label");
+const connStatus  = document.getElementById("conn-status");
+
+function setStatus(text, cls) {
+    statusLabel.textContent = text;
+    connStatus.className = cls || "";
+}
+
+function log(msg, type = "info") {
+    const el = document.getElementById("log");
+    el.innerHTML = `<div class="entry ${type}" style="padding:0 14px 6px;">${msg}</div>` + el.innerHTML;
+}
+
+function updateStats(orig, simp) {
+    document.getElementById("stat-original").textContent   = orig !== null ? orig : "—";
+    document.getElementById("stat-simplified").textContent = simp !== null ? simp : "—";
+    document.getElementById("stat-removed").textContent    = (orig !== null && simp !== null) ? (orig - simp) + " (" + Math.round((orig - simp) / orig * 100) + "%)" : "—";
+}
+
+tolSlider.addEventListener("input", () => {
+    tolValue.textContent = parseFloat(tolSlider.value).toFixed(4);
+});
+
+// ── Drawing ──
+drawBtn.addEventListener("click", () => {
+    clearAll();
+    drawing = true;
+    map.getContainer().style.cursor = "crosshair";
+    drawBtn.disabled  = true;
+    finishBtn.disabled = false;
+    simplifyBtn.disabled = true;
+    setStatus("Drawing…", "drawing");
+    log("Click on the map to add points. Click Finish when done.", "info");
+});
+
+finishBtn.addEventListener("click", finishDrawing);
+
+function finishDrawing() {
+    if (drawnPoints.length < 2) {
+        log("Need at least 2 points to form a line.", "warn");
+        return;
+    }
+    drawing = false;
+    map.getContainer().style.cursor = "";
+    finishBtn.disabled = true;
+    simplifyBtn.disabled = false;
+    setStatus("Line ready", "done");
+    log(`Polyline complete — ${drawnPoints.length} points.`, "ok");
+    updateStats(drawnPoints.length, null);
+}
+
+map.on("click", (e) => {
+    if (!drawing) return;
+    drawnPoints.push([e.latlng.lat, e.latlng.lng]);
+
+    // small dot marker for each click
+    const dot = L.circleMarker([e.latlng.lat, e.latlng.lng], {
+        radius: 4, color: "#58a6ff", fillColor: "#58a6ff",
+        fillOpacity: 1, weight: 1
+    }).addTo(map);
+    tempMarkers.push(dot);
+
+    // redraw original line preview
+    if (originalLayer) map.removeLayer(originalLayer);
+    originalLayer = L.polyline(drawnPoints, {
+        color: "#58a6ff", weight: 2.5, opacity: 0.9
+    }).addTo(map);
+
+    setStatus(`Drawing… (${drawnPoints.length} pts)`, "drawing");
+});
+
+// ── Simplify ──
+simplifyBtn.addEventListener("click", runSimplify);
+
+function runSimplify() {
+    if (drawnPoints.length < 2) return;
+
+    const tolerance = parseFloat(tolSlider.value);
+
+    const geojsonLine = turf.lineString(drawnPoints.map(p => [p[1], p[0]]));
+    const simplified  = turf.simplify(geojsonLine, { tolerance, highQuality: true });
+    const simpCoords  = simplified.geometry.coordinates.map(c => [c[1], c[0]]);
+
+    // remove original line and dot markers
+    if (originalLayer) { map.removeLayer(originalLayer); originalLayer = null; }
+    tempMarkers.forEach(m => map.removeLayer(m));
+    tempMarkers = [];
+
+    if (simplifiedLayer) map.removeLayer(simplifiedLayer);
+    simplifiedLayer = L.polyline(simpCoords, {
+        color: "#f85149", weight: 2.5, opacity: 0.9,
+        dashArray: "6 5"
+    }).addTo(map);
+
+    updateStats(drawnPoints.length, simpCoords.length);
+    log(`Simplified to ${simpCoords.length} pts (tolerance ${tolerance.toFixed(4)}).`, "ok");
+    setStatus("Simplified", "done");
+    simplifyBtn.disabled = true;
+}
+
+// ── Clear ──
+clearBtn.addEventListener("click", clearAll);
+
+function clearAll() {
+    drawing = false;
+    drawnPoints = [];
+    if (originalLayer)   { map.removeLayer(originalLayer);   originalLayer   = null; }
+    if (simplifiedLayer) { map.removeLayer(simplifiedLayer); simplifiedLayer = null; }
+    tempMarkers.forEach(m => map.removeLayer(m));
+    tempMarkers = [];
+    map.getContainer().style.cursor = "";
+    drawBtn.disabled     = false;
+    finishBtn.disabled   = true;
+    simplifyBtn.disabled = true;
+    updateStats(null, null);
+    setStatus("Ready", "");
+    log("Cleared. Ready to draw a new polyline.", "info");
+}
+
+// ── Desktop: resizable sidebar ──
+const sidebar = document.getElementById("sidebar");
+const handle  = document.getElementById("resize-handle");
+const toggle  = document.getElementById("panel-toggle");
+let isResizing = false, startX = 0, startW = 0;
+
+handle.addEventListener("mousedown", e => {
+    isResizing = true; startX = e.clientX; startW = sidebar.offsetWidth;
+    handle.classList.add("dragging"); e.preventDefault();
+});
+document.addEventListener("mousemove", e => {
+    if (!isResizing) return;
+    const newW = Math.max(200, Math.min(window.innerWidth * 0.8, startW + (e.clientX - startX)));
+    sidebar.style.width = newW + "px";
+    document.documentElement.style.setProperty("--panel-w", newW + "px");
+});
+document.addEventListener("mouseup", () => { isResizing = false; handle.classList.remove("dragging"); });
+
+toggle.addEventListener("click", () => sidebar.classList.toggle("collapsed"));
+
+// ── Mobile: bottom drawer ──
+const drawerBar = document.getElementById("drawer-bar");
+const chevron   = document.getElementById("drawer-chevron");
+const SNAP_CLOSED = 48;
+const SNAP_OPEN   = Math.round(window.innerHeight * 0.55);
+let drawerOpen = false, touchStartY = 0, touchStartH = 0, drawerH = SNAP_CLOSED;
+
+function isMobile() { return window.innerWidth <= 640; }
+
+function setDrawerHeight(h, animate) {
+    drawerH = h;
+    sidebar.style.transition = animate ? "height .25s ease" : "none";
+    sidebar.style.height = h + "px";
+    document.documentElement.style.setProperty("--drawer-h", h + "px");
+    chevron.innerHTML = h > SNAP_CLOSED + 20 ? "&#8963;" : "&#8964;";
+}
+
+drawerBar.addEventListener("click", () => {
+    if (!isMobile()) return;
+    drawerOpen = !drawerOpen;
+    setDrawerHeight(drawerOpen ? SNAP_OPEN : SNAP_CLOSED, true);
+});
+drawerBar.addEventListener("touchstart", e => {
+    if (!isMobile()) return;
+    touchStartY = e.touches[0].clientY;
+    touchStartH = sidebar.offsetHeight;
+    sidebar.style.transition = "none";
+}, { passive: true });
+drawerBar.addEventListener("touchmove", e => {
+    if (!isMobile()) return;
+    const dy = touchStartY - e.touches[0].clientY;
+    setDrawerHeight(Math.max(SNAP_CLOSED, Math.min(window.innerHeight * 0.85, touchStartH + dy)), false);
+}, { passive: true });
+drawerBar.addEventListener("touchend", () => {
+    if (!isMobile()) return;
+    drawerOpen = drawerH > (SNAP_OPEN + SNAP_CLOSED) / 2;
+    setDrawerHeight(drawerOpen ? SNAP_OPEN : SNAP_CLOSED, true);
+});
+
+const mapResizeObserver = new ResizeObserver(() => map.invalidateSize());
+mapResizeObserver.observe(document.getElementById("map"));
+</script>
+</body>
+</html>
